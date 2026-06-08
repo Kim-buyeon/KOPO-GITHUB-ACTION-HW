@@ -130,7 +130,42 @@ def estimate_calories(items):
         return None
 
 
-def analyze_allergies(items):
+def evaluate_meal(items):
+    """오늘 급식 메뉴를 학생 입장에서 재밌게 평가한다."""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key or not items:
+        return None
+    try:
+        prompt = (
+            "너는 급식을 누구보다 사랑하는 한국 대학생이야.\n"
+            "오늘 급식 메뉴를 보고 솔직하고 재밌게 평가해줘.\n\n"
+            "평가 기준:\n"
+            "- 인기 메뉴(닭갈비, 탕수육, 돈까스 등)가 있으면 기대감 높게\n"
+            "- 메뉴 구성이 풍성하면 긍정적으로\n"
+            "- 다이어트 메뉴나 채소 위주면 살짝 아쉬움\n"
+            "- 면류(냉모밀, 짜장 등)가 있으면 특별 언급\n"
+            "- 학생들 반응을 예측해서 '줄 설 것 같다', '오늘 일찍 가야겠다' 등 포함\n\n"
+            f"오늘 메뉴: {', '.join(items)}\n\n"
+            "2~3문장으로 짧고 재밌게 평가해줘. 이모지 1~2개 포함."
+        )
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}",
+                     "Content-Type": "application/json"},
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.9,  # 높게 설정해 매일 다른 평가 생성
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        result = resp.json()["choices"][0]["message"]["content"].strip()
+        print(f"[AI] 급식 평가 완료")
+        return result
+    except Exception as e:
+        print(f"[AI] 급식 평가 실패: {e}", file=sys.stderr)
+        return None
     """메뉴별 잠재 알레르기 유발 성분을 분석한다.
 
     한국 식품 알레르기 표시 기준 21종 기반:
@@ -363,12 +398,17 @@ def generate_menu_image(items):
 # 메시지 구성
 # ---------------------------------------------------------------------------
 
-def build_message_plain(day, items, calories, today_str, dinner=None, allergies=None):
+def build_message_plain(day, items, calories, today_str,
+                        dinner=None, allergies=None, evaluation=None):
     """플랫폼 공통으로 쓸 수 있는 마크다운 없는 메시지."""
     if not items:
         return f"🍽️ {today_str} ({day})\n오늘은 등록된 중식 메뉴가 없어요. (휴무/공휴일일 수 있어요)"
     lines = [f"🍽️ {today_str} ({day}) 오늘의 점심", ""]
     lines += [f"• {it}" for it in items]
+
+    if evaluation:
+        lines += ["", f"🎯 오늘의 급식 평가", evaluation]
+
     if calories:
         lines += ["", f"📊 {calories}"]
 
@@ -415,7 +455,8 @@ def send_teams_powerautomate(webhook_url, text, image_url=None):
             "wrap": True,
         }
         # 제목 줄만 굵게 (weight 는 Teams 지원)
-        if line.startswith("🍽️") or line.startswith("🌙") or line.startswith("⚠️"):
+        if line.startswith("🍽️") or line.startswith("🌙") or \
+                line.startswith("⚠️") or line.startswith("🎯"):
             block["weight"] = "Bolder"
 
         body_blocks.append(block)
@@ -476,12 +517,14 @@ def main():
     day, items = get_today_menu(html)
     print(f"파싱 결과: {today_str} {day} -> {items}")
 
-    calories  = estimate_calories(items)
-    allergies = analyze_allergies(items)
-    dinner    = recommend_dinner(items)
-    image_url = generate_menu_image(items)
+    calories   = estimate_calories(items)
+    evaluation = evaluate_meal(items)
+    allergies  = analyze_allergies(items)
+    dinner     = recommend_dinner(items)
+    image_url  = generate_menu_image(items)
     text = build_message_plain(day, items, calories, today_str,
-                               dinner=dinner, allergies=allergies)
+                               dinner=dinner, allergies=allergies,
+                               evaluation=evaluation)
 
     sender(webhook_url, text, image_url)
     print(f"전송 완료 ({webhook_type}): 메뉴 {len(items)}개")
