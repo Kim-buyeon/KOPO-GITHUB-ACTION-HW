@@ -148,18 +148,34 @@ def build_message_plain(day, items, calories, today_str):
 # ---------------------------------------------------------------------------
 
 def send_teams_powerautomate(webhook_url, text):
-    """Power Automate 'When an HTTP request is received' 트리거에 맞춘 페이로드.
+    """PA 'Post card in a chat or channel' 액션에 맞춘 Adaptive Card 페이로드.
 
-    PA 플로우에서 triggerBody()?['text'] 또는 triggerBody()?['message'] 로 읽어
-    Teams 채널에 포스팅하도록 설정하면 됩니다.
-    (플로우 편집 화면 참고 → 'Teams에 메시지 게시' 액션 → 메시지 필드에 수식 입력)
+    PA 플로우가 triggerBody() 를 그대로 카드 내용으로 사용하므로
+    본문 전체를 유효한 AdaptiveCard JSON 으로 전송한다.
     """
-    payload = {
-        "text": text,       # Teams 메시지 본문
-        "message": text,    # 플로우 설정에 따라 둘 중 하나를 씀
-        "title": "오늘의 점심",
+    body_blocks = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        block = {
+            "type": "TextBlock",
+            "text": line,
+            "wrap": True,
+        }
+        # 첫 줄(날짜+요일 제목)은 굵게 처리
+        if line.startswith("🍽️"):
+            block["weight"] = "Bolder"
+            block["size"] = "Medium"
+            block["color"] = "Accent"
+        body_blocks.append(block)
+
+    adaptive_card = {
+        "type": "AdaptiveCard",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.4",
+        "body": body_blocks,
     }
-    r = requests.post(webhook_url, json=payload, timeout=15)
+    r = requests.post(webhook_url, json=adaptive_card, timeout=15)
     r.raise_for_status()
 
 
