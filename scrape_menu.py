@@ -10,6 +10,8 @@ Microsoft Teams(Power Automate)로 전송하는 봇.
 
 import os
 import sys
+import base64
+import io
 from datetime import datetime, timezone, timedelta
 
 import requests
@@ -187,6 +189,36 @@ def recommend_dinner(items):
         return None
 
 
+def compress_image_b64(b64_data, max_size=512, quality=75):
+    """base64 PNG 이미지를 리사이즈 + JPEG 압축해서 용량을 줄인다.
+
+    1024x1024 PNG (~1.5MB) → 512x512 JPEG quality=75 (~80KB 수준)
+
+    Args:
+        max_size: 가로/세로 최대 픽셀 (기본 512)
+        quality:  JPEG 품질 0~95 (기본 75, 낮을수록 작아짐)
+    """
+    from PIL import Image
+    try:
+        raw = base64.b64decode(b64_data)
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+
+        # 비율 유지하며 리사이즈
+        img.thumbnail((max_size, max_size), Image.LANCZOS)
+
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        compressed = base64.b64encode(buf.getvalue()).decode()
+
+        original_kb  = len(b64_data) * 3 // 4 // 1024
+        compressed_kb = len(compressed) * 3 // 4 // 1024
+        print(f"[AI] 이미지 압축: {original_kb}KB → {compressed_kb}KB")
+        return compressed
+    except Exception as e:
+        print(f"[AI] 이미지 압축 실패 (원본 사용): {e}", file=sys.stderr)
+        return b64_data  # 실패 시 원본 그대로
+
+
 def generate_menu_image(items):
     """gpt-image-1 로 급식 트레이 이미지를 생성하고 imgbb 에 업로드해 URL을 반환한다.
 
@@ -231,6 +263,9 @@ def generate_menu_image(items):
             print("[AI] 이미지 응답에 b64_json 없음", file=sys.stderr)
             return None
         print("[AI] 이미지 생성 완료 (gpt-image-1)")
+
+        # 업로드 전 압축 (1024px PNG → 512px JPEG)
+        b64_data = compress_image_b64(b64_data)
 
     except Exception as e:
         print(f"[AI] 이미지 생성 예외: {e}", file=sys.stderr)
