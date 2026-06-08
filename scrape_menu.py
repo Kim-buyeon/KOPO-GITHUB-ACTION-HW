@@ -320,10 +320,11 @@ def build_message_plain(day, items, calories, today_str, dinner=None):
 # ---------------------------------------------------------------------------
 
 def send_teams_powerautomate(webhook_url, text, image_url=None):
-    """PA 'Post card in a chat or channel' 액션에 맞춘 Adaptive Card 페이로드."""
+    """PA 'Post card in a chat or channel' 액션에 맞춘 Adaptive Card 페이로드.
+    Teams Bot Framework 호환을 위해 TextBlock 기본 속성만 사용한다.
+    """
     body_blocks = []
 
-    # 이미지가 있으면 맨 위에 배치
     if image_url:
         body_blocks.append({
             "type": "Image",
@@ -332,36 +333,24 @@ def send_teams_powerautomate(webhook_url, text, image_url=None):
             "altText": "오늘의 급식 사진",
         })
 
-    in_dinner_section = False
     for line in text.splitlines():
         if not line.strip():
             continue
-
-        # 저녁 추천 섹션 시작 → 구분선 먼저 삽입
-        if line.startswith("🌙") and not in_dinner_section:
-            body_blocks.append({"type": "Separator"})
-            in_dinner_section = True
-
-        block = {"type": "TextBlock", "text": line, "wrap": True}
-
-        if line.startswith("🍽️"):          # 점심 제목
+        block = {
+            "type": "TextBlock",
+            "text": line,
+            "wrap": True,
+        }
+        # 제목 줄만 굵게 (weight 는 Teams 지원)
+        if line.startswith("🍽️") or line.startswith("🌙"):
             block["weight"] = "Bolder"
-            block["size"] = "Medium"
-            block["color"] = "Accent"
-        elif line.startswith("🌙"):         # 저녁 추천 제목
-            block["weight"] = "Bolder"
-            block["size"] = "Medium"
-            block["color"] = "Warning"
-        elif line.startswith("💡"):         # 추천 이유
-            block["isSubtle"] = True
-            block["size"] = "Small"
 
         body_blocks.append(block)
 
     adaptive_card = {
         "type": "AdaptiveCard",
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-        "version": "1.4",
+        "version": "1.2",   # Teams 가 안정적으로 지원하는 버전
         "body": body_blocks,
     }
     r = requests.post(webhook_url, json=adaptive_card, timeout=15)
