@@ -166,6 +166,9 @@ def evaluate_meal(items):
     except Exception as e:
         print(f"[AI] 급식 평가 실패: {e}", file=sys.stderr)
         return None
+
+
+def analyze_allergies(items):
     """메뉴별 잠재 알레르기 유발 성분을 분석한다.
 
     한국 식품 알레르기 표시 기준 21종 기반:
