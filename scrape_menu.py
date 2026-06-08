@@ -129,40 +129,56 @@ def estimate_calories(items):
 
 
 def generate_menu_image(items):
-    """DALL-E 3으로 실제 급식 트레이에 오늘 메뉴가 담긴 사진을 생성한다."""
+    """DALL-E로 급식 트레이에 오늘 메뉴가 담긴 사진을 생성한다.
+    dall-e-3 실패 시 dall-e-2 로 자동 재시도한다.
+    """
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key or not items:
         return None
-    try:
-        menu_str = ", ".join(items)
-        prompt = (
-            "A photorealistic top-down photo of a Korean school cafeteria lunch. "
-            "A standard rectangular stainless steel Korean cafeteria tray with multiple "
-            "divided compartments, each compartment containing a different dish. "
-            f"The dishes served today are: {menu_str}. "
-            "Each dish is placed in its own compartment and looks freshly cooked and appetizing. "
-            "The tray sits on a clean cafeteria table. Bright, natural overhead lighting. "
-            "Highly detailed, realistic food photography style."
-        )
-        resp = requests.post(
-            "https://api.openai.com/v1/images/generations",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": "dall-e-3",
+
+    menu_str = ", ".join(items)
+    prompt = (
+        "A photorealistic top-down food photo of a Korean cafeteria lunch tray. "
+        "The tray is a rectangular stainless steel divided tray with multiple compartments. "
+        f"Each compartment contains a different Korean dish: {menu_str}. "
+        "The food is freshly served, colorful, and appetizing. "
+        "Clean white table background, bright natural lighting, food photography style."
+    )
+
+    for model in ("dall-e-3", "dall-e-2"):
+        try:
+            params = {
+                "model": model,
                 "prompt": prompt,
                 "n": 1,
                 "size": "1024x1024",
-                "quality": "standard",
-            },
-            timeout=60,
-        )
-        resp.raise_for_status()
-        image_url = resp.json()["data"][0]["url"]
-        print(f"[AI] 이미지 생성 완료")
-        return image_url
-    except Exception as e:
-        print(f"[AI] 이미지 생성 실패: {e}", file=sys.stderr)
-        return None
+            }
+            if model == "dall-e-3":
+                params["quality"] = "standard"
+
+            resp = requests.post(
+                "https://api.openai.com/v1/images/generations",
+                headers={"Authorization": f"Bearer {api_key}",
+                         "Content-Type": "application/json"},
+                json=params,
+                timeout=60,
+            )
+
+            if not resp.ok:
+                # 400 등 에러 시 상세 내용 출력 후 다음 모델로 폴백
+                print(f"[AI] {model} 실패 ({resp.status_code}): {resp.text}", file=sys.stderr)
+                continue
+
+            image_url = resp.json()["data"][0]["url"]
+            print(f"[AI] 이미지 생성 완료 ({model})")
+            return image_url
+
+        except Exception as e:
+            print(f"[AI] {model} 예외: {e}", file=sys.stderr)
+            continue
+
+    print("[AI] 이미지 생성 실패: 모든 모델 시도 완료", file=sys.stderr)
+    return None
 
 
 # ---------------------------------------------------------------------------
