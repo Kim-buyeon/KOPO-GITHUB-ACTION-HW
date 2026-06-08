@@ -9,6 +9,7 @@ on:
 jobs:
   send-menu:
     runs-on: ubuntu-latest
+    timeout-minutes: 10   # 이미지 생성 포함 최대 10분 허용
     steps:
       - name: Checkout
         uses: actions/checkout@v4

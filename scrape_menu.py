@@ -161,7 +161,7 @@ def generate_menu_image(items):
                 "n": 1,
                 "size": "1024x1024",
             },
-            timeout=60,
+            timeout=120,
         )
         if not resp.ok:
             print(f"[AI] 이미지 생성 실패 ({resp.status_code}): {resp.text}", file=sys.stderr)
