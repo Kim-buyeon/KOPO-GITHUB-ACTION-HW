@@ -128,6 +128,43 @@ def estimate_calories(items):
         return None
 
 
+def generate_menu_image(items):
+    """DALL-E 3으로 실제 급식 트레이에 오늘 메뉴가 담긴 사진을 생성한다."""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key or not items:
+        return None
+    try:
+        menu_str = ", ".join(items)
+        prompt = (
+            "A photorealistic top-down photo of a Korean school cafeteria lunch. "
+            "A standard rectangular stainless steel Korean cafeteria tray with multiple "
+            "divided compartments, each compartment containing a different dish. "
+            f"The dishes served today are: {menu_str}. "
+            "Each dish is placed in its own compartment and looks freshly cooked and appetizing. "
+            "The tray sits on a clean cafeteria table. Bright, natural overhead lighting. "
+            "Highly detailed, realistic food photography style."
+        )
+        resp = requests.post(
+            "https://api.openai.com/v1/images/generations",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": "dall-e-3",
+                "prompt": prompt,
+                "n": 1,
+                "size": "1024x1024",
+                "quality": "standard",
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        image_url = resp.json()["data"][0]["url"]
+        print(f"[AI] 이미지 생성 완료")
+        return image_url
+    except Exception as e:
+        print(f"[AI] 이미지 생성 실패: {e}", file=sys.stderr)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # 메시지 구성
 # ---------------------------------------------------------------------------
@@ -147,22 +184,23 @@ def build_message_plain(day, items, calories, today_str):
 # Webhook 전송 — Power Automate(Teams) / Discord / Slack
 # ---------------------------------------------------------------------------
 
-def send_teams_powerautomate(webhook_url, text):
-    """PA 'Post card in a chat or channel' 액션에 맞춘 Adaptive Card 페이로드.
-
-    PA 플로우가 triggerBody() 를 그대로 카드 내용으로 사용하므로
-    본문 전체를 유효한 AdaptiveCard JSON 으로 전송한다.
-    """
+def send_teams_powerautomate(webhook_url, text, image_url=None):
+    """PA 'Post card in a chat or channel' 액션에 맞춘 Adaptive Card 페이로드."""
     body_blocks = []
+
+    # 이미지가 있으면 맨 위에 배치
+    if image_url:
+        body_blocks.append({
+            "type": "Image",
+            "url": image_url,
+            "size": "Stretch",
+            "altText": "오늘의 급식 사진",
+        })
+
     for line in text.splitlines():
         if not line.strip():
             continue
-        block = {
-            "type": "TextBlock",
-            "text": line,
-            "wrap": True,
-        }
-        # 첫 줄(날짜+요일 제목)은 굵게 처리
+        block = {"type": "TextBlock", "text": line, "wrap": True}
         if line.startswith("🍽️"):
             block["weight"] = "Bolder"
             block["size"] = "Medium"
@@ -179,13 +217,19 @@ def send_teams_powerautomate(webhook_url, text):
     r.raise_for_status()
 
 
-def send_discord(webhook_url, text):
-    r = requests.post(webhook_url, json={"embeds": [{"description": text, "color": 0x4CAF50}]}, timeout=15)
+def send_discord(webhook_url, text, image_url=None):
+    embed = {"description": text, "color": 0x4CAF50}
+    if image_url:
+        embed["image"] = {"url": image_url}
+    r = requests.post(webhook_url, json={"embeds": [embed]}, timeout=15)
     r.raise_for_status()
 
 
-def send_slack(webhook_url, text):
-    r = requests.post(webhook_url, json={"text": text}, timeout=15)
+def send_slack(webhook_url, text, image_url=None):
+    blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": text}}]
+    if image_url:
+        blocks.append({"type": "image", "image_url": image_url, "alt_text": "오늘의 급식"})
+    r = requests.post(webhook_url, json={"text": text, "blocks": blocks}, timeout=15)
     r.raise_for_status()
 
 
@@ -220,9 +264,10 @@ def main():
     print(f"파싱 결과: {today_str} {day} -> {items}")
 
     calories = estimate_calories(items)
+    image_url = generate_menu_image(items)
     text = build_message_plain(day, items, calories, today_str)
 
-    sender(webhook_url, text)
+    sender(webhook_url, text, image_url)
     print(f"전송 완료 ({webhook_type}): 메뉴 {len(items)}개")
 
 
