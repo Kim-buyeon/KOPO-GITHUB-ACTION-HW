@@ -129,11 +129,15 @@ def estimate_calories(items):
 
 
 def generate_menu_image(items):
-    """DALL-E로 급식 트레이에 오늘 메뉴가 담긴 사진을 생성한다.
-    dall-e-3 실패 시 dall-e-2 로 자동 재시도한다.
+    """gpt-image-1 로 급식 트레이 이미지를 생성하고 imgbb 에 업로드해 URL을 반환한다.
+
+    필요한 Secret:
+        OPENAI_API_KEY  - 이미지 생성
+        IMGBB_API_KEY   - 이미지 호스팅 (https://api.imgbb.com 에서 무료 발급)
     """
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key or not items:
+    openai_key = os.environ.get("OPENAI_API_KEY")
+    imgbb_key   = os.environ.get("IMGBB_API_KEY")
+    if not openai_key or not items:
         return None
 
     menu_str = ", ".join(items)
@@ -142,43 +146,58 @@ def generate_menu_image(items):
         "The tray is a rectangular stainless steel divided tray with multiple compartments. "
         f"Each compartment contains a different Korean dish: {menu_str}. "
         "The food is freshly served, colorful, and appetizing. "
-        "Clean white table background, bright natural lighting, food photography style."
+        "Clean background, bright natural lighting, food photography style."
     )
 
-    for model in ("dall-e-3", "dall-e-2"):
-        try:
-            params = {
-                "model": model,
+    # ── 1단계: gpt-image-1 로 base64 이미지 생성 ──────────────────────────
+    try:
+        resp = requests.post(
+            "https://api.openai.com/v1/images/generations",
+            headers={"Authorization": f"Bearer {openai_key}",
+                     "Content-Type": "application/json"},
+            json={
+                "model": "gpt-image-1",
                 "prompt": prompt,
                 "n": 1,
                 "size": "1024x1024",
-            }
-            if model == "dall-e-3":
-                params["quality"] = "standard"
+            },
+            timeout=60,
+        )
+        if not resp.ok:
+            print(f"[AI] 이미지 생성 실패 ({resp.status_code}): {resp.text}", file=sys.stderr)
+            return None
 
-            resp = requests.post(
-                "https://api.openai.com/v1/images/generations",
-                headers={"Authorization": f"Bearer {api_key}",
-                         "Content-Type": "application/json"},
-                json=params,
-                timeout=60,
-            )
+        b64_data = resp.json()["data"][0].get("b64_json")
+        if not b64_data:
+            print("[AI] 이미지 응답에 b64_json 없음", file=sys.stderr)
+            return None
+        print("[AI] 이미지 생성 완료 (gpt-image-1)")
 
-            if not resp.ok:
-                # 400 등 에러 시 상세 내용 출력 후 다음 모델로 폴백
-                print(f"[AI] {model} 실패 ({resp.status_code}): {resp.text}", file=sys.stderr)
-                continue
+    except Exception as e:
+        print(f"[AI] 이미지 생성 예외: {e}", file=sys.stderr)
+        return None
 
-            image_url = resp.json()["data"][0]["url"]
-            print(f"[AI] 이미지 생성 완료 ({model})")
-            return image_url
+    # ── 2단계: imgbb 에 업로드해서 공개 URL 획득 ──────────────────────────
+    if not imgbb_key:
+        print("[AI] IMGBB_API_KEY 없음 → 이미지 생략 (Secret 에 추가하면 Teams 카드에 표시됨)", file=sys.stderr)
+        return None
+    try:
+        upload = requests.post(
+            "https://api.imgbb.com/1/upload",
+            data={"key": imgbb_key, "image": b64_data},
+            timeout=30,
+        )
+        if not upload.ok:
+            print(f"[AI] imgbb 업로드 실패 ({upload.status_code}): {upload.text}", file=sys.stderr)
+            return None
 
-        except Exception as e:
-            print(f"[AI] {model} 예외: {e}", file=sys.stderr)
-            continue
+        image_url = upload.json()["data"]["url"]
+        print(f"[AI] 이미지 업로드 완료")
+        return image_url
 
-    print("[AI] 이미지 생성 실패: 모든 모델 시도 완료", file=sys.stderr)
-    return None
+    except Exception as e:
+        print(f"[AI] imgbb 업로드 예외: {e}", file=sys.stderr)
+        return None
 
 
 # ---------------------------------------------------------------------------
