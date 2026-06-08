@@ -130,6 +130,71 @@ def estimate_calories(items):
         return None
 
 
+def analyze_allergies(items):
+    """메뉴별 잠재 알레르기 유발 성분을 분석한다.
+
+    한국 식품 알레르기 표시 기준 21종 기반:
+    난류, 우유, 메밀, 땅콩, 대두, 밀, 고등어, 게, 새우, 돼지고기,
+    복숭아, 토마토, 아황산류, 호두, 닭고기, 쇠고기, 오징어, 조개류, 잣,
+    글루텐, 견과류
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key or not items:
+        return None
+    try:
+        allergen_list = (
+            "난류(계란), 우유(유제품), 메밀, 땅콩, 대두(콩), 밀(글루텐), "
+            "고등어, 게, 새우, 돼지고기, 복숭아, 토마토, 아황산류, 호두, "
+            "닭고기, 쇠고기, 오징어, 조개류, 잣, 견과류"
+        )
+        menu_str = "\n".join(f"- {it}" for it in items)
+        prompt = (
+            f"한국 식품 알레르기 표시 기준 21종은 다음과 같아: {allergen_list}\n\n"
+            "아래 급식 메뉴 각각에 포함될 수 있는 알레르기 유발 성분을 분석해줘.\n"
+            "확실하지 않아도 재료상 포함 가능성이 있으면 표시해.\n"
+            "없으면 '없음'으로 표시해.\n\n"
+            f"메뉴:\n{menu_str}\n\n"
+            "아래 형식으로만 답해줘 (다른 말 없이, 메뉴 순서 그대로):\n"
+            + "\n".join(f"{it}: [알레르기1, 알레르기2, ...]" for it in items)
+        )
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}",
+                     "Content-Type": "application/json"},
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3,   # 낮게 설정해 일관성 있는 결과
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        raw = resp.json()["choices"][0]["message"]["content"].strip()
+
+        # 파싱: "메뉴명: [A, B, C]" 형태 → {메뉴명: [A, B, C]}
+        result = {}
+        for line in raw.splitlines():
+            if ":" not in line:
+                continue
+            name, _, allergens_raw = line.partition(":")
+            name = name.strip()
+            # 매칭되는 메뉴명 찾기 (GPT가 메뉴명을 살짝 바꾸는 경우 대비)
+            matched = next((it for it in items if it in name or name in it), name)
+            allergens = [
+                a.strip().strip("[]")
+                for a in allergens_raw.replace("[", "").replace("]", "").split(",")
+                if a.strip() and a.strip() not in ("없음", "[]", "")
+            ]
+            result[matched] = allergens
+
+        print(f"[AI] 알레르기 분석 완료: {len(result)}개 항목")
+        return result
+
+    except Exception as e:
+        print(f"[AI] 알레르기 분석 실패: {e}", file=sys.stderr)
+        return None
+
+
 def recommend_dinner(items):
     """점심 메뉴를 분석해 영양 균형을 고려한 저녁 메뉴를 추천한다.
 
@@ -298,7 +363,7 @@ def generate_menu_image(items):
 # 메시지 구성
 # ---------------------------------------------------------------------------
 
-def build_message_plain(day, items, calories, today_str, dinner=None):
+def build_message_plain(day, items, calories, today_str, dinner=None, allergies=None):
     """플랫폼 공통으로 쓸 수 있는 마크다운 없는 메시지."""
     if not items:
         return f"🍽️ {today_str} ({day})\n오늘은 등록된 중식 메뉴가 없어요. (휴무/공휴일일 수 있어요)"
@@ -306,6 +371,14 @@ def build_message_plain(day, items, calories, today_str, dinner=None):
     lines += [f"• {it}" for it in items]
     if calories:
         lines += ["", f"📊 {calories}"]
+
+    if allergies:
+        lines += ["", "⚠️ 알레르기 정보 (AI 추정)"]
+        for item in items:
+            allergen_list = allergies.get(item, [])
+            tag = ", ".join(allergen_list) if allergen_list else "해당없음"
+            lines.append(f"• {item}: {tag}")
+        lines += ["", "※ 정확한 정보는 급식실에 문의하세요."]
 
     if dinner:
         lines += ["", "🌙 오늘 저녁 추천"]
@@ -342,7 +415,7 @@ def send_teams_powerautomate(webhook_url, text, image_url=None):
             "wrap": True,
         }
         # 제목 줄만 굵게 (weight 는 Teams 지원)
-        if line.startswith("🍽️") or line.startswith("🌙"):
+        if line.startswith("🍽️") or line.startswith("🌙") or line.startswith("⚠️"):
             block["weight"] = "Bolder"
 
         body_blocks.append(block)
@@ -403,10 +476,12 @@ def main():
     day, items = get_today_menu(html)
     print(f"파싱 결과: {today_str} {day} -> {items}")
 
-    calories = estimate_calories(items)
-    dinner   = recommend_dinner(items)
+    calories  = estimate_calories(items)
+    allergies = analyze_allergies(items)
+    dinner    = recommend_dinner(items)
     image_url = generate_menu_image(items)
-    text = build_message_plain(day, items, calories, today_str, dinner=dinner)
+    text = build_message_plain(day, items, calories, today_str,
+                               dinner=dinner, allergies=allergies)
 
     sender(webhook_url, text, image_url)
     print(f"전송 완료 ({webhook_type}): 메뉴 {len(items)}개")
