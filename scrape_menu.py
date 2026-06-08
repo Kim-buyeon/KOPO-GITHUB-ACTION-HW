@@ -128,6 +128,65 @@ def estimate_calories(items):
         return None
 
 
+def recommend_dinner(items):
+    """점심 메뉴를 분석해 영양 균형을 고려한 저녁 메뉴를 추천한다.
+
+    분석 기준:
+      - 단백질/채소/탄수화물 비율
+      - 나트륨·칼로리 과다 여부 (국물 메뉴, 볶음류 등)
+      - 맛 프로필 (매운맛, 기름진 맛, 담백함)
+      - 조리 방식 중복 회피 (점심에 볶음이 많으면 저녁은 찜/삶기 위주 등)
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key or not items:
+        return None
+    try:
+        prompt = (
+            "너는 한국인 영양사야. 오늘 점심 급식 메뉴를 보고 저녁 식사 메뉴를 추천해줘.\n\n"
+            "분석 규칙:\n"
+            "1. 점심에 고기류가 많으면 → 저녁은 채소·두부·생선 위주\n"
+            "2. 점심에 국물(찌개·국)이 있으면 → 저녁은 국물 없이 담백하게\n"
+            "3. 점심이 고탄수화물(밥·면)이면 → 저녁은 잡곡밥 또는 밥 양 줄이기\n"
+            "4. 점심이 매운 메뉴 위주면 → 저녁은 순한 맛\n"
+            "5. 점심 칼로리가 높으면 → 저녁은 700kcal 이하 목표\n"
+            "6. 채소 반찬이 부족했으면 → 저녁은 나물·샐러드 강화\n\n"
+            f"오늘 점심 메뉴: {', '.join(items)}\n\n"
+            "아래 형식으로만 답해줘 (다른 말 없이):\n"
+            "추천메뉴: [메뉴1], [메뉴2], [메뉴3], [메뉴4]\n"
+            "추천이유: [점심 분석 + 저녁 보완 포인트를 한 문장으로]"
+        )
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}",
+                     "Content-Type": "application/json"},
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        raw = resp.json()["choices"][0]["message"]["content"].strip()
+
+        # 파싱: "추천메뉴: A, B, C\n추천이유: ..." 형태
+        dinner_items, reason = [], ""
+        for line in raw.splitlines():
+            if line.startswith("추천메뉴:"):
+                dinner_items = [x.strip() for x in line.replace("추천메뉴:", "").split(",") if x.strip()]
+            elif line.startswith("추천이유:"):
+                reason = line.replace("추천이유:", "").strip()
+
+        if not dinner_items:
+            return None
+        print(f"[AI] 저녁 추천 완료: {dinner_items}")
+        return {"items": dinner_items, "reason": reason}
+
+    except Exception as e:
+        print(f"[AI] 저녁 추천 실패: {e}", file=sys.stderr)
+        return None
+
+
 def generate_menu_image(items):
     """gpt-image-1 로 급식 트레이 이미지를 생성하고 imgbb 에 업로드해 URL을 반환한다.
 
@@ -204,7 +263,7 @@ def generate_menu_image(items):
 # 메시지 구성
 # ---------------------------------------------------------------------------
 
-def build_message_plain(day, items, calories, today_str):
+def build_message_plain(day, items, calories, today_str, dinner=None):
     """플랫폼 공통으로 쓸 수 있는 마크다운 없는 메시지."""
     if not items:
         return f"🍽️ {today_str} ({day})\n오늘은 등록된 중식 메뉴가 없어요. (휴무/공휴일일 수 있어요)"
@@ -212,6 +271,12 @@ def build_message_plain(day, items, calories, today_str):
     lines += [f"• {it}" for it in items]
     if calories:
         lines += ["", f"📊 {calories}"]
+
+    if dinner:
+        lines += ["", "🌙 오늘 저녁 추천"]
+        lines += [f"• {it}" for it in dinner["items"]]
+        if dinner["reason"]:
+            lines += ["", f"💡 {dinner['reason']}"]
     return "\n".join(lines)
 
 
@@ -232,14 +297,30 @@ def send_teams_powerautomate(webhook_url, text, image_url=None):
             "altText": "오늘의 급식 사진",
         })
 
+    in_dinner_section = False
     for line in text.splitlines():
         if not line.strip():
             continue
+
+        # 저녁 추천 섹션 시작 → 구분선 먼저 삽입
+        if line.startswith("🌙") and not in_dinner_section:
+            body_blocks.append({"type": "Separator"})
+            in_dinner_section = True
+
         block = {"type": "TextBlock", "text": line, "wrap": True}
-        if line.startswith("🍽️"):
+
+        if line.startswith("🍽️"):          # 점심 제목
             block["weight"] = "Bolder"
             block["size"] = "Medium"
             block["color"] = "Accent"
+        elif line.startswith("🌙"):         # 저녁 추천 제목
+            block["weight"] = "Bolder"
+            block["size"] = "Medium"
+            block["color"] = "Warning"
+        elif line.startswith("💡"):         # 추천 이유
+            block["isSubtle"] = True
+            block["size"] = "Small"
+
         body_blocks.append(block)
 
     adaptive_card = {
@@ -299,8 +380,9 @@ def main():
     print(f"파싱 결과: {today_str} {day} -> {items}")
 
     calories = estimate_calories(items)
+    dinner   = recommend_dinner(items)
     image_url = generate_menu_image(items)
-    text = build_message_plain(day, items, calories, today_str)
+    text = build_message_plain(day, items, calories, today_str, dinner=dinner)
 
     sender(webhook_url, text, image_url)
     print(f"전송 완료 ({webhook_type}): 메뉴 {len(items)}개")
