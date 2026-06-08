@@ -84,7 +84,9 @@ def parse_week_menu(html):
 def clean_menu_items(raw):
     if not raw:
         return []
-    parts = [p.strip(" ,") for p in raw.replace("\n", " ").split(",")]
+    # Windows 줄바꿈(\r\n) 또는 단독 \r 제거 후 쉼표로 분리
+    raw = raw.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    parts = [p.strip(" ,") for p in raw.split(",")]
     return [p for p in parts if p]
 
 
