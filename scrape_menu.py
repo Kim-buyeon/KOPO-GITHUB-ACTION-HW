@@ -279,7 +279,7 @@ def generate_menu_image(items):
         upload = requests.post(
             "https://api.imgbb.com/1/upload",
             data={"key": imgbb_key, "image": b64_data},
-            timeout=30,
+            timeout=60,
         )
         if not upload.ok:
             print(f"[AI] imgbb 업로드 실패 ({upload.status_code}): {upload.text}", file=sys.stderr)
